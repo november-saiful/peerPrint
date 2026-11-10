@@ -1,0 +1,9 @@
+pub mod autostart;
+pub mod dpapi;
+pub mod elevation;
+pub mod firewall;
+pub mod powershell;
+pub mod service;
+pub mod single_instance;
+pub mod spooler;
+pub mod titlebar;

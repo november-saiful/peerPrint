@@ -1,0 +1,25 @@
+1 ICON "peerprint.ico"
+1 24 "peerprint.manifest"
+
+1 VERSIONINFO
+FILEVERSION 0,1,0,0
+PRODUCTVERSION 0,1,0,0
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "peerPrint"
+      VALUE "FileDescription", "peerPrint"
+      VALUE "FileVersion", "0.1.0"
+      VALUE "InternalName", "peerprint"
+      VALUE "OriginalFilename", "peerprint.exe"
+      VALUE "ProductName", "peerPrint"
+      VALUE "ProductVersion", "0.1.0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END

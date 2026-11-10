@@ -1,0 +1,8 @@
+/target
+/dist
+*.log
+.env
+
+# local scratch files
+/peerPrinttargetcaption-1.png
+/targetrun-backup.reg
