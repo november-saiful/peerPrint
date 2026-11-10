@@ -5,10 +5,11 @@ analytics, and it never sends printer jobs, documents or job history to a third 
 
 ## What leaves this PC
 
-- **Update checks (optional, once a day).** The app requests the public release feed at
-  `api.github.com` with `User-Agent: peerPrint/<version>` and `Accept: application/vnd.github+json`.
-  GitHub receives the usual connection metadata (IP address, TLS handshake, headers); no device or
-  user identifier is added. Turn it off in **Settings → Updates**.
+- **Update checks (optional, once a day).** The app requests the public releases page at
+  `github.com/november-saiful/peerPrint/releases/latest` and reads its redirect to the newest
+  stable tag, with `User-Agent: peerPrint/<version>`. GitHub receives the usual connection
+  metadata (IP address, TLS handshake, headers); no device or user identifier is added. Turn it
+  off in **Settings → Updates**.
 - **Local discovery.** mDNS/DNS-SD advertisements and browsing happen on the local network only and
   expose the display name you choose. Nothing is sent to the internet.
 - **Printing.** Jobs travel directly from the client PC to the host PC over TLS, authenticated with
