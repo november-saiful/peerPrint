@@ -6,6 +6,26 @@ peerPrint is a single Windows desktop app. The PC with the printer **hosts** it;
 
 ![peerPrint Host tab](docs/screenshot-host.png)
 
+## Download
+
+Grab the latest installer from the
+[Releases page](https://github.com/november-saiful/peerPrint/releases/latest). The setup asks for
+the install mode and what this PC should do:
+
+- **All users** — installs to Program Files and registers the background Windows service, so
+  sharing works before anyone signs in. Needs administrator approval.
+- **Just me** — per-user tray app that starts at sign-in. No admin rights.
+
+Verify the download against `SHA256SUMS.txt`:
+
+```powershell
+Get-FileHash .\peerPrint-0.1.0-setup.exe -Algorithm SHA256
+```
+
+Windows SmartScreen will warn that the publisher is unknown until signed builds ship; peerPrint
+participates in the SignPath Foundation's open-source code signing program. The app has no
+telemetry — see [docs/PRIVACY.md](docs/PRIVACY.md).
+
 ## Why peerPrint
 
 Built-in Windows printer sharing works, until it doesn't: guest accounts, SMB versions, workgroup
@@ -70,7 +90,7 @@ including what a vendor driver actually sends to the port.
 
 ## Build from source
 
-There are no published binaries yet; build the app yourself:
+Prefer to build it yourself? The toolchain is pinned by `rust-toolchain.toml`:
 
 ```powershell
 rustup show          # uses rust-toolchain.toml
