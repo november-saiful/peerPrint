@@ -4,7 +4,7 @@ All notable changes to peerPrint are recorded here. Releases use
 [Semantic Versioning](https://semver.org/); the app itself reports the same version in
 Settings and on the command line.
 
-## [Unreleased]
+## [0.1.1] - 2026-11-10
 
 ### Changed
 

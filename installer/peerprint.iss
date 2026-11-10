@@ -9,7 +9,7 @@
 
 #define MyAppName "peerPrint"
 #ifndef MyAppVersion
-  #define MyAppVersion "0.1.0"
+  #define MyAppVersion "0.1.1"
 #endif
 #define MyAppPublisher "peerPrint"
 #define MyAppExeName "peerprint.exe"
