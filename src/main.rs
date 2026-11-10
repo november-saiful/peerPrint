@@ -12,6 +12,7 @@ mod net;
 mod pairing;
 mod service;
 mod ui;
+mod update;
 mod win;
 
 use std::io::Write;

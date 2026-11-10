@@ -36,6 +36,8 @@ the internet.
   installs a Windows service that starts before sign-in and serves printers machine-wide.
 - **Guardrails instead of guesses.** The Windows Firewall rules helper, protected-print-mode
   detection, a diagnostics panel and `--diagnose` JSON make failures explainable.
+- **Update notices.** peerPrint checks GitHub Releases once a day and links to the new version from
+  Settings → Updates. The check can be turned off and never downloads or runs anything by itself.
 
 ## How it works
 
@@ -172,6 +174,17 @@ with one UAC prompt. Clients only connect outward and open loopback ports.
 peerPrint is designed for trusted home and small-office LANs. Do not forward its port from the
 internet; if you need printing across sites, use a VPN.
 
+## Updates
+
+peerPrint checks the public GitHub Releases feed at most once a day and tells you when a newer
+stable release exists. The check sends only the app version in its User-Agent, compares versions,
+and opens the release page in your browser when you click **View release** — it never downloads or
+runs an installer on its own. Turn it off in Settings → Updates.
+
+Published releases are built by GitHub Actions: the workflow verifies that the tag matches
+`Cargo.toml`, builds the release binary, packages the Inno Setup installer, and publishes the setup
+plus `SHA256SUMS.txt`. See [CHANGELOG.md](CHANGELOG.md) for release notes.
+
 ## Repository layout
 
 ```text
@@ -186,6 +199,7 @@ src/identity.rs    P-256 certificate and DPAPI-protected key
 src/net/           framing, protocol messages, TLS configuration
 src/win/           spooler, queue install, service, firewall, DPAPI, autostart, single instance
 src/ui/            egui UI: host, client, history, settings, dialogs, notifications, tray
+src/update.rs      GitHub Releases update check
 docs/print-path.md measured Windows print-path notes
 installer/         Inno Setup 6 script
 ```

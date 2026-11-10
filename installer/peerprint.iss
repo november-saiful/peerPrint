@@ -8,7 +8,9 @@
 ; A wizard page then asks what this PC should do: host, client, or both.
 
 #define MyAppName "peerPrint"
-#define MyAppVersion "0.1.0"
+#ifndef MyAppVersion
+  #define MyAppVersion "0.1.0"
+#endif
 #define MyAppPublisher "peerPrint"
 #define MyAppExeName "peerprint.exe"
 

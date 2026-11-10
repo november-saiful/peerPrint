@@ -200,6 +200,100 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, core: &CoreState) {
     });
 
     ui.add_space(16.0);
+    let update_checking = app.state.updates.checking;
+    let update_checked = app.state.updates.checked;
+    let update_available = app.state.updates.available.clone();
+    let update_error = app.state.updates.error.clone();
+    let update_last_check = app.state.updates.last_check.max(cfg.updates.last_check);
+    theme::card(ui, |ui| {
+        theme::section_title(ui, "Updates");
+        ui.add_space(10.0);
+        ui.horizontal(|ui| {
+            let mut enabled = cfg.updates.auto_check;
+            if theme::toggle(ui, &mut enabled).changed() {
+                cfg.updates.auto_check = enabled;
+                dirty = true;
+            }
+            ui.add_space(10.0);
+            ui.vertical(|ui| {
+                ui.label(
+                    egui::RichText::new("Check for updates automatically")
+                        .size(13.0)
+                        .color(p.text),
+                );
+                theme::muted(
+                    ui,
+                    "Asks GitHub once a day; only the version number is compared.",
+                );
+            });
+        });
+
+        ui.add_space(14.0);
+        theme::divider(ui);
+        ui.add_space(14.0);
+
+        ui.horizontal(|ui| {
+            // Reserve the button column first so long error text wraps instead of
+            // running underneath the buttons.
+            let text_width = (ui.available_width() - 240.0).max(180.0);
+            ui.vertical(|ui| {
+                ui.set_max_width(text_width);
+                if let Some(release) = &update_available {
+                    ui.label(
+                        egui::RichText::new(format!("peerPrint v{} is available", release.version))
+                            .size(13.0)
+                            .color(p.text),
+                    );
+                    theme::muted(
+                        ui,
+                        "Download the setup from the release page and run it; settings and printers are kept.",
+                    );
+                } else if update_checking {
+                    ui.label(egui::RichText::new("Checking GitHub…").size(13.0).color(p.text));
+                } else if update_error.is_some() {
+                    ui.label(
+                        egui::RichText::new("Could not check for updates")
+                            .size(13.0)
+                            .color(p.text),
+                    );
+                    if let Some(error) = &update_error {
+                        theme::muted(ui, error);
+                    }
+                } else if update_checked || update_last_check > 0 {
+                    ui.label(egui::RichText::new("peerPrint is up to date").size(13.0).color(p.text));
+                } else {
+                    ui.label(egui::RichText::new("Not checked yet").size(13.0).color(p.text));
+                }
+                let mut detail = format!("Version {}", env!("CARGO_PKG_VERSION"));
+                if update_last_check > 0 {
+                    detail.push_str(&format!(
+                        " · last checked {}",
+                        crate::ui::format_age(update_last_check)
+                    ));
+                }
+                theme::muted(ui, &detail);
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if let Some(release) = update_available.clone() {
+                    if theme::primary_button(ui, "View release").clicked() {
+                        if let Err(err) = crate::update::open_release_page(&release) {
+                            app.backend.notice(
+                                NoticeLevel::Error,
+                                format!("opening the release page: {err:#}"),
+                            );
+                        }
+                    }
+                }
+                if update_checking {
+                    ui.spinner();
+                } else if theme::secondary_button(ui, "Check now").clicked() {
+                    app.start_update_check(ui.ctx());
+                }
+            });
+        });
+    });
+
+    ui.add_space(16.0);
     theme::card(ui, |ui| {
         theme::section_title(ui, "Diagnostics");
         ui.add_space(10.0);

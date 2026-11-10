@@ -22,6 +22,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::backend::Backend;
 use crate::service::NoticeLevel;
+use crate::update;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tab {
@@ -57,6 +58,17 @@ pub struct UiState {
     pub flyout_notice: u64,
     pub flyouts: Vec<notifications::Flyout>,
     pub bell_rect: egui::Rect,
+    pub updates: UpdateState,
+}
+
+#[derive(Default)]
+pub struct UpdateState {
+    pub checking: bool,
+    /// At least one check finished in this session.
+    pub checked: bool,
+    pub available: Option<update::Release>,
+    pub error: Option<String>,
+    pub last_check: i64,
 }
 
 impl Default for UiState {
@@ -78,6 +90,7 @@ impl Default for UiState {
             flyout_notice: 0,
             flyouts: Vec::new(),
             bell_rect: egui::Rect::NOTHING,
+            updates: UpdateState::default(),
         }
     }
 }
@@ -88,6 +101,7 @@ pub enum ActionDone {
     Removed(Uuid, Result<(), String>),
     Tested(Uuid, Result<(), String>),
     Firewall(Result<(), String>),
+    UpdateChecked(Result<Option<update::Release>, String>),
 }
 
 pub struct App {
@@ -139,6 +153,8 @@ impl App {
                 ActionDone::Removed(id, _) => ActionDone::Removed(id, result),
                 ActionDone::Tested(id, _) => ActionDone::Tested(id, result),
                 ActionDone::Firewall(_) => ActionDone::Firewall(result),
+                // Update checks deliver a release, so they spawn their own task.
+                ActionDone::UpdateChecked(_) => unreachable!("update checks are spawned directly"),
             });
             ctx.request_repaint();
         });
@@ -195,8 +211,100 @@ impl App {
                         Err(message) => self.backend.notice(NoticeLevel::Error, message),
                     }
                 }
+                ActionDone::UpdateChecked(result) => self.finish_update_check(result),
             }
         }
+    }
+
+    fn finish_update_check(&mut self, result: Result<Option<update::Release>, String>) {
+        self.state.updates.checking = false;
+        let now = crate::config::now_unix();
+        self.state.updates.last_check = now;
+        let mut cfg = self.backend.config();
+        cfg.updates.last_check = now;
+        match result {
+            Ok(available) => {
+                self.state.updates.checked = true;
+                self.state.updates.error = None;
+                if let Some(release) = &available {
+                    let already_notified = cfg.updates.last_notified_version.as_deref()
+                        == Some(release.version.as_str());
+                    if !already_notified {
+                        cfg.updates.last_notified_version = Some(release.version.clone());
+                        self.backend.notice(
+                            NoticeLevel::Info,
+                            format!(
+                                "peerPrint v{} is available — see Settings → Updates",
+                                release.version
+                            ),
+                        );
+                    }
+                }
+                self.state.updates.available = available.clone();
+                cfg.updates.available = available.map(|release| crate::config::CachedRelease {
+                    version: release.version,
+                    html_url: release.html_url,
+                });
+                cfg.updates.last_error = None;
+            }
+            Err(message) => {
+                tracing::warn!("update check failed: {message}");
+                self.state.updates.error = Some(message.clone());
+                cfg.updates.last_error = Some(message);
+            }
+        }
+        if let Err(err) = self.backend.set_config(cfg) {
+            tracing::warn!("saving the update check time failed: {err:#}");
+        }
+    }
+
+    /// Runs at most one automatic check per day, and only when enabled.
+    fn maybe_check_updates(&mut self, ctx: &egui::Context) {
+        if self.state.updates.checking {
+            return;
+        }
+        let cfg = self.backend.config();
+        self.state.updates.last_check = cfg.updates.last_check;
+        if self.state.updates.available.is_none() {
+            // A restart inside the daily window still shows the known release.
+            self.state.updates.available = cfg
+                .updates
+                .available
+                .as_ref()
+                .and_then(|cached| update::cached(&cached.version, &cached.html_url));
+        }
+        if self.state.updates.error.is_none() && !self.state.updates.checked {
+            // Preserve the last outcome instead of claiming the build is current.
+            self.state.updates.error = cfg.updates.last_error.clone();
+        }
+        if !cfg.updates.auto_check {
+            return;
+        }
+        if cfg.updates.last_check != 0 {
+            let elapsed = crate::config::now_unix().saturating_sub(cfg.updates.last_check);
+            if elapsed < update::CHECK_INTERVAL_SECS {
+                return;
+            }
+        }
+        self.start_update_check(ctx);
+    }
+
+    pub fn start_update_check(&mut self, ctx: &egui::Context) {
+        if self.state.updates.checking {
+            return;
+        }
+        self.state.updates.checking = true;
+        self.state.updates.error = None;
+        let sender = self.sender.clone();
+        let ctx = ctx.clone();
+        self.backend.runtime().spawn(async move {
+            let result = match tokio::task::spawn_blocking(update::check).await {
+                Ok(result) => result.map_err(|err| format!("{err:#}")),
+                Err(err) => Err(format!("the update task failed: {err}")),
+            };
+            let _ = sender.send(ActionDone::UpdateChecked(result));
+            ctx.request_repaint();
+        });
     }
 }
 
@@ -204,6 +312,7 @@ impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         ctx.request_repaint_after(Duration::from_secs(1));
         self.drain_actions();
+        self.maybe_check_updates(ctx);
         self.ensure_tray(ctx);
         let core = self.backend.core();
         notifications::sync(self, ctx, &core);

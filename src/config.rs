@@ -97,6 +97,8 @@ pub struct AppConfig {
     /// What this installation is allowed to do; chosen by the installer.
     #[serde(default)]
     pub role: Role,
+    #[serde(default)]
+    pub updates: UpdateConfig,
 }
 
 impl Default for AppConfig {
@@ -107,6 +109,44 @@ impl Default for AppConfig {
             client: ClientConfig::default(),
             autostart: true,
             role: Role::Both,
+            updates: UpdateConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UpdateConfig {
+    #[serde(default = "default_true")]
+    pub auto_check: bool,
+    /// Unix time of the last check attempt, successful or not.
+    #[serde(default)]
+    pub last_check: i64,
+    /// The release version the user was already notified about.
+    #[serde(default)]
+    pub last_notified_version: Option<String>,
+    /// The newer release the last successful check found, kept so the Settings
+    /// card stays accurate between daily checks.
+    #[serde(default)]
+    pub available: Option<CachedRelease>,
+    /// Why the last check failed, cleared by the next successful one.
+    #[serde(default)]
+    pub last_error: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CachedRelease {
+    pub version: String,
+    pub html_url: String,
+}
+
+impl Default for UpdateConfig {
+    fn default() -> Self {
+        Self {
+            auto_check: true,
+            last_check: 0,
+            last_notified_version: None,
+            available: None,
+            last_error: None,
         }
     }
 }

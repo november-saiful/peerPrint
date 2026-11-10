@@ -4,7 +4,7 @@
 Read it fully before changing code. It records what the app is, what the user asked for, what has
 been verified, what is only probed, and the exact migration plan and commands.
 
-Last updated: 2026-11-10 (notification flyouts/center, History tab, borderless custom title bar).
+Last updated: 2026-11-10 (notification flyouts/center, History tab, borderless title bar, update checks).
 
 > **2026-11-09 update — UI decision reversed.** The Slint 1.18.1 migration was implemented and
 > verified, then reverted at the user's request: the Slint Royalty-free 2.0 license requires a
@@ -319,6 +319,7 @@ shutdown/pause still runs.
 | `src/ui/pairing_dialog.rs` | 142 | Add-printer modal (`egui::Modal`) |
 | `src/ui/jobs_panel.rs` | 124 | Job rows + Cancel button + Received/Sent direction pill |
 | `src/ui/tray.rs` | 117 | `tray-icon` crate tray |
+| `src/update.rs` | | GitHub Releases update check, version comparison, release-page opener |
 | `src/win/*` | | spooler, elevation, firewall, autostart, DPAPI, single instance |
 | `assets/peerprint-256.png`, `.ico`, `.manifest`, `.rc` | | icon/resource embedding via `build.rs` |
 
@@ -435,6 +436,35 @@ restores, edge drag resizes (846×720 checked), minimize/close behave (close lea
 running in the tray), DWM shadow and rounded corners intact. Synthetic taskbar *hover previews*
 cannot be triggered on this machine (Explorer's own preview does not appear either), so the
 thumbnail itself was not screenshotted — the shell inputs it reads are verified instead.
+
+### Update checks (`src/update.rs`, `src/ui/mod.rs`, `src/ui/settings.rs`)
+
+Notify-only by design: the app never downloads or executes an installer. `update::check()` calls
+`https://api.github.com/repos/november-saiful/peerPrint/releases/latest` with a 15 s timeout and
+`User-Agent: peerPrint/<version>`, ignores drafts and prereleases, strips an optional `v` from the
+tag, and returns the release only when `semver` says it is newer. Release links must start with
+`https://github.com/`; opening uses `ShellExecuteW("open")`. A 404 (no releases yet) means "up to
+date", not an error.
+
+`App::maybe_check_updates` runs from `logic()` at most once per `update::CHECK_INTERVAL_SECS`
+(24 h), only when `cfg.updates.auto_check` is on; failing silently except for the Settings status
+text. `App::start_update_check` spawns `spawn_blocking(update::check)` on the backend runtime and
+delivers `ActionDone::UpdateChecked` (which is deliberately not routed through `spawn_action`,
+whose task result is `Result<(), String>`). On success it saves `updates.last_check`, clears
+`updates.last_error`, caches the found release in `updates.available` (version + link) and posts one
+Info notice per new version (`updates.last_notified_version` prevents repeats). A failure stores
+the message in `updates.last_error`, so a restart inside the 24 h window keeps showing the error
+instead of claiming "up to date"; both caches are re-validated at startup by `update::cached`. The
+settings card shows available / checking / up to date or error, plus "Check now" and "View release";
+its text column reserves 240 px for those buttons so long error text wraps instead of running
+underneath them.
+
+Tests use `PEERPRINT_UPDATE_API` to point the checker at a local fixture server:
+`update::tests` cover tag normalization, newer/equal/older, drafts, prereleases, foreign links,
+malformed tags and cached-release revalidation. Release publishing is
+`.github/workflows/release.yml` (tag `v*`, tag must equal `Cargo.toml`; builds the binary, `iscc`,
+SHA-256 sums, GitHub Release); the installer accepts `/DMyAppVersion=<version>` so CI can override
+the version define.
 
 
 ---
@@ -865,6 +895,14 @@ license choice must not ship without attribution.)
   flyout floats bottom-left and is gone by ~5 s, the sidebar badge stays until the bell is opened,
   the center lists it, Clear empties it, and no flyout replays after an engine restart (notices are
   memory-only).
+- Update check: use a scratch `PEERPRINT_DATA_DIR` and point `PEERPRINT_UPDATE_API` at a local
+  HTTP server (for example `python -m http.server`) serving a GitHub-shaped release JSON with
+  `tag_name` above `Cargo.toml`'s version. Confirm the flyout, the Settings → Updates card and
+  **View release**; then serve 404 to confirm "up to date"; then stop the server to confirm the
+  error text. `updates.last_check` gates the daily check, so reset the scratch config (or start a
+  new data dir) between runs. Relaunch the same data dir to confirm the second run makes no HTTP
+  request, replays no flyout, and still shows the cached release (or the cached error) in Settings.
+  Never publish a test release to the real repository for this.
 
 ---
 
