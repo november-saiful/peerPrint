@@ -6,6 +6,11 @@ Settings and on the command line.
 
 ## [Unreleased]
 
+### Changed
+
+- Update checks follow GitHub's `releases/latest` redirect instead of the REST API, which is
+  capped at 60 anonymous requests per hour per IP and failed with HTTP 403 on shared connections.
+
 ### Added
 
 - Update checks against GitHub Releases: peerPrint asks once a day whether a newer stable release

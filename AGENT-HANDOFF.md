@@ -439,12 +439,14 @@ thumbnail itself was not screenshotted — the shell inputs it reads are verifie
 
 ### Update checks (`src/update.rs`, `src/ui/mod.rs`, `src/ui/settings.rs`)
 
-Notify-only by design: the app never downloads or executes an installer. `update::check()` calls
-`https://api.github.com/repos/november-saiful/peerPrint/releases/latest` with a 15 s timeout and
-`User-Agent: peerPrint/<version>`, ignores drafts and prereleases, strips an optional `v` from the
-tag, and returns the release only when `semver` says it is newer. Release links must start with
-`https://github.com/`; opening uses `ShellExecuteW("open")`. A 404 (no releases yet) means "up to
-date", not an error.
+Notify-only by design: the app never downloads or executes an installer. `update::check()` requests
+`https://github.com/november-saiful/peerPrint/releases/latest` with `redirects(0)` and reads the
+`Location` header. GitHub's web redirect resolves to the newest non-draft, non-prerelease tag, so
+the result has the right semantics without touching the REST API — important because the API allows
+only 60 anonymous requests per hour per IP, and a shared ISP address exhausted it (403) on
+2026-11-10. The target must be `https://github.com/november-saiful/peerPrint/releases/tag/<tag>`;
+the tag is parsed as semver after an optional `v`. A 404 (no releases yet) means "up to date", not an
+error. Release links must stay on this repository; opening uses `ShellExecuteW("open")`.
 
 `App::maybe_check_updates` runs from `logic()` at most once per `update::CHECK_INTERVAL_SECS`
 (24 h), only when `cfg.updates.auto_check` is on; failing silently except for the Settings status
@@ -459,12 +461,13 @@ settings card shows available / checking / up to date or error, plus "Check now"
 its text column reserves 240 px for those buttons so long error text wraps instead of running
 underneath them.
 
-Tests use `PEERPRINT_UPDATE_API` to point the checker at a local fixture server:
-`update::tests` cover tag normalization, newer/equal/older, drafts, prereleases, foreign links,
-malformed tags and cached-release revalidation. Release publishing is
-`.github/workflows/release.yml` (tag `v*`, tag must equal `Cargo.toml`; builds the binary, `iscc`,
-SHA-256 sums, GitHub Release); the installer accepts `/DMyAppVersion=<version>` so CI can override
-the version define.
+Tests use `PEERPRINT_UPDATE_API` to point the checker at a local fixture server that answers with a
+`Location` header (or 404): `update::tests` cover tag normalization, newer/equal/older, foreign
+repositories and non-https links, malformed tags, cached-release revalidation, and socket fixtures
+that assert the 302 `Location` is read without being followed and that 404 is not an error. Release
+publishing is `.github/workflows/release.yml` (tag `v*`, tag must equal `Cargo.toml`; builds the
+binary, `iscc`, SHA-256 sums, GitHub Release); the installer accepts `/DMyAppVersion=<version>` so
+CI can override the version define.
 
 
 ---
@@ -896,13 +899,13 @@ license choice must not ship without attribution.)
   the center lists it, Clear empties it, and no flyout replays after an engine restart (notices are
   memory-only).
 - Update check: use a scratch `PEERPRINT_DATA_DIR` and point `PEERPRINT_UPDATE_API` at a local
-  HTTP server (for example `python -m http.server`) serving a GitHub-shaped release JSON with
-  `tag_name` above `Cargo.toml`'s version. Confirm the flyout, the Settings → Updates card and
-  **View release**; then serve 404 to confirm "up to date"; then stop the server to confirm the
-  error text. `updates.last_check` gates the daily check, so reset the scratch config (or start a
-  new data dir) between runs. Relaunch the same data dir to confirm the second run makes no HTTP
-  request, replays no flyout, and still shows the cached release (or the cached error) in Settings.
-  Never publish a test release to the real repository for this.
+  HTTP server answering `302` with `Location: https://github.com/november-saiful/peerPrint/
+  releases/tag/v<newer>` (or 404 for "up to date"). Confirm the flyout, the Settings → Updates card
+  and **View release**; stop the server to confirm the error text. `updates.last_check` gates the
+  daily check, so reset the scratch config (or start a new data dir) between runs. Relaunch the
+  same data dir to confirm the second run makes no HTTP request, replays no flyout, and still shows
+  the cached release (or the cached error) in Settings. Never publish a test release to the real
+  repository for this.
 
 ---
 

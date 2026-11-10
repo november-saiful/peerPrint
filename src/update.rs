@@ -1,5 +1,8 @@
-//! Checks the public GitHub Releases feed for a newer build.
+//! Checks the public GitHub Releases page for a newer build.
 //!
+//! The check follows the `/releases/latest` redirect instead of the REST API:
+//! the API allows only 60 unauthenticated requests per hour per IP, which
+//! shared connections exhaust, while the web redirect carries no such quota.
 //! This module never downloads or runs anything: it only reports the newest
 //! stable release so the UI can offer a link to its release page.
 
@@ -11,9 +14,12 @@ use windows::core::PCWSTR;
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
-pub const FEED_URL: &str =
-    "https://api.github.com/repos/november-saiful/peerPrint/releases/latest";
+pub const RELEASES_URL: &str =
+    "https://github.com/november-saiful/peerPrint/releases/latest";
 pub const CHECK_INTERVAL_SECS: i64 = 24 * 60 * 60;
+
+/// Path under github.com that identifies a release tag of this repository.
+const TAG_PREFIX: &str = "/november-saiful/peerPrint/releases/tag/";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Release {
@@ -23,84 +29,80 @@ pub struct Release {
     pub published_at: Option<String>,
 }
 
-#[derive(serde::Deserialize)]
-struct FeedRelease {
-    tag_name: String,
-    #[serde(default)]
-    name: Option<String>,
-    html_url: String,
-    #[serde(default)]
-    published_at: Option<String>,
-    #[serde(default)]
-    draft: bool,
-    #[serde(default)]
-    prerelease: bool,
-}
-
 pub fn current_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
 /// Returns the newest stable release when it is newer than this build.
+///
+/// `/releases/latest` redirects to the newest non-draft, non-prerelease tag,
+/// so the redirect target already has the right semantics.
 pub fn check() -> Result<Option<Release>> {
-    // Overridable so the checker can be tested against a local fixture server.
+    // Overridable so the checker can be tested against a local fixture server
+    // that answers with a Location header pointing at a release tag.
     let url = std::env::var("PEERPRINT_UPDATE_API")
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| FEED_URL.to_string());
+        .unwrap_or_else(|| RELEASES_URL.to_string());
+    check_url(&url)
+}
+
+fn check_url(url: &str) -> Result<Option<Release>> {
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(15))
+        .redirects(0)
         .build();
-    let reply = agent
+    let response = match agent
         .get(&url)
         .set("User-Agent", &format!("peerPrint/{}", current_version()))
-        .set("Accept", "application/vnd.github+json")
-        .call();
-    let body = match reply {
-        Ok(response) => response.into_string().context("reading the release feed")?,
-        // A repository without any release answers 404; that is not an error.
+        .call()
+    {
+        Ok(response) => response,
+        // A repository without any release has no redirect target.
         Err(ureq::Error::Status(404, _)) => return Ok(None),
         Err(err) => return Err(err).context("asking GitHub for the latest release"),
     };
-    let feed: FeedRelease = serde_json::from_str(&body).context("parsing the release feed")?;
-    Ok(newer_release(feed, current_version()))
+    if response.status() == 404 {
+        return Ok(None);
+    }
+    if !(300..400).contains(&response.status()) {
+        bail!("the releases page answered {}", response.status());
+    }
+    let location = response
+        .header("Location")
+        .context("the releases page did not redirect")?;
+    Ok(newer_release(location, current_version()))
 }
 
-fn newer_release(feed: FeedRelease, current: &str) -> Option<Release> {
-    if feed.draft || feed.prerelease {
-        return None;
-    }
-    let latest = parse_version(&feed.tag_name)?;
+fn tag_from_release_url(url: &str) -> Option<&str> {
+    let path = url
+        .strip_prefix("https://github.com")
+        .or_else(|| url.strip_prefix("https://www.github.com"))?;
+    let tag = path.strip_prefix(TAG_PREFIX)?;
+    Some(tag.split(['?', '#']).next().unwrap_or(tag))
+}
+
+fn newer_release(location: &str, current: &str) -> Option<Release> {
+    let tag = tag_from_release_url(location)?;
+    let latest = parse_version(tag)?;
     let current = Version::parse(current).ok()?;
     if latest <= current {
-        return None;
-    }
-    if !is_https_github(&feed.html_url) {
-        return None;
-    }
-    Some(Release {
-        version: latest.to_string(),
-        name: feed.name.unwrap_or_else(|| format!("peerPrint {}", feed.tag_name)),
-        html_url: feed.html_url,
-        published_at: feed.published_at,
-    })
-}
-
-/// Rebuilds a release from the cached config entry. Anything that is no longer
-/// newer than this build, or is not a GitHub HTTPS link, is discarded.
-pub fn cached(version: &str, html_url: &str) -> Option<Release> {
-    let latest = Version::parse(version).ok()?;
-    let current = Version::parse(current_version()).ok()?;
-    if latest <= current || !is_https_github(html_url) {
         return None;
     }
     Some(Release {
         version: latest.to_string(),
         name: format!("peerPrint {latest}"),
-        html_url: html_url.to_string(),
+        html_url: location.to_string(),
         published_at: None,
     })
+}
+
+/// Rebuilds a release from the cached config entry. The link must still point
+/// at a tag of this repository that is newer than this build.
+pub fn cached(version: &str, html_url: &str) -> Option<Release> {
+    let release = newer_release(html_url, current_version())?;
+    (release.version == version).then_some(release)
 }
 
 fn parse_version(tag: &str) -> Option<Version> {
@@ -143,15 +145,8 @@ pub fn open_release_page(release: &Release) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn feed(tag: &str) -> FeedRelease {
-        FeedRelease {
-            tag_name: tag.to_string(),
-            name: None,
-            html_url: format!("https://github.com/november-saiful/peerPrint/releases/tag/{tag}"),
-            published_at: None,
-            draft: false,
-            prerelease: false,
-        }
+    fn tag_url(tag: &str) -> String {
+        format!("https://github.com/november-saiful/peerPrint/releases/tag/{tag}")
     }
 
     #[test]
@@ -164,41 +159,104 @@ mod tests {
 
     #[test]
     fn only_newer_stable_releases_are_offered() {
-        let newer = newer_release(feed("v0.2.0"), "0.1.0").expect("0.2.0 is newer");
+        let newer = newer_release(&tag_url("v0.2.0"), "0.1.0").expect("0.2.0 is newer");
         assert_eq!(newer.version, "0.2.0");
-        assert_eq!(newer.name, "peerPrint v0.2.0");
-        assert!(newer_release(feed("v0.1.0"), "0.1.0").is_none());
-        assert!(newer_release(feed("v0.0.9"), "0.1.0").is_none());
+        assert_eq!(newer.name, "peerPrint 0.2.0");
+        assert_eq!(newer.html_url, tag_url("v0.2.0"));
+        assert!(newer_release(&tag_url("v0.1.0"), "0.1.0").is_none());
+        assert!(newer_release(&tag_url("v0.0.9"), "0.1.0").is_none());
+        assert!(newer_release(&tag_url("v0.2.0?notice=1"), "0.1.0").is_some());
     }
 
     #[test]
-    fn drafts_prereleases_and_foreign_links_are_ignored() {
-        let mut draft = feed("v0.2.0");
-        draft.draft = true;
-        assert!(newer_release(draft, "0.1.0").is_none());
-
-        let mut prerelease = feed("v0.2.0");
-        prerelease.prerelease = true;
-        assert!(newer_release(prerelease, "0.1.0").is_none());
-
-        let mut foreign = feed("v0.2.0");
-        foreign.html_url = "https://example.com/peerPrint/releases/tag/v0.2.0".to_string();
-        assert!(newer_release(foreign, "0.1.0").is_none());
+    fn release_links_must_point_at_this_repository() {
+        assert!(newer_release(
+            "https://example.com/peerPrint/releases/tag/v9.9.9",
+            "0.1.0"
+        )
+        .is_none());
+        assert!(newer_release(
+            "https://github.com/other/repo/releases/tag/v9.9.9",
+            "0.1.0"
+        )
+        .is_none());
+        assert!(newer_release(
+            "https://github.com/november-saiful/peerPrint/releases",
+            "0.1.0"
+        )
+        .is_none());
+        assert!(newer_release(
+            "http://github.com/november-saiful/peerPrint/releases/tag/v9.9.9",
+            "0.1.0"
+        )
+        .is_none());
     }
 
     #[test]
     fn malformed_tags_are_ignored() {
-        assert!(newer_release(feed("nightly"), "0.1.0").is_none());
+        assert!(newer_release(&tag_url("nightly"), "0.1.0").is_none());
+    }
+
+    #[test]
+    fn redirect_location_is_read_without_following_it() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = [0u8; 1024];
+            let _ = socket.read(&mut request);
+            socket
+                .write_all(
+                    b"HTTP/1.1 302 Found\r\n\
+                      Location: https://github.com/november-saiful/peerPrint/releases/tag/v99.0.0\r\n\
+                      Content-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .unwrap();
+        });
+
+        let release = check_url(&format!("http://{addr}/latest"))
+            .unwrap()
+            .expect("the redirect target is newer");
+        assert_eq!(release.version, "99.0.0");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn missing_releases_page_is_not_an_error() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = [0u8; 1024];
+            let _ = socket.read(&mut request);
+            socket
+                .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .unwrap();
+        });
+
+        assert!(check_url(&format!("http://{addr}/latest")).unwrap().is_none());
+        server.join().unwrap();
     }
 
     #[test]
     fn cached_releases_are_revalidated() {
-        let url = "https://github.com/november-saiful/peerPrint/releases/tag/v0.2.0";
-        let release = cached("0.2.0", url).expect("0.2.0 is newer than this build");
+        let url = tag_url("v0.2.0");
+        let release = cached("0.2.0", &url).expect("0.2.0 is newer than this build");
         assert_eq!(release.version, "0.2.0");
         assert_eq!(release.html_url, url);
-        assert!(cached("0.1.0", url).is_none());
+        assert!(cached("0.1.0", &url).is_none());
+        assert!(cached("0.3.0", &url).is_none());
+        assert!(cached(
+            "0.2.0",
+            "https://github.com/other/repo/releases/tag/v0.2.0"
+        )
+        .is_none());
         assert!(cached("0.2.0", "javascript:alert(1)").is_none());
-        assert!(cached("latest", url).is_none());
     }
 }
