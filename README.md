@@ -238,4 +238,4 @@ name sanitization, outbox recovery and log redaction.
 
 ## License
 
-MIT — see the `license` field in [Cargo.toml](Cargo.toml).
+MIT — see [LICENSE](LICENSE).
