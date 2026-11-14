@@ -4,6 +4,20 @@ All notable changes to peerPrint are recorded here. Releases use
 [Semantic Versioning](https://semver.org/); the app itself reports the same version in
 Settings and on the command line.
 
+## [Unreleased]
+
+### Fixed
+
+- Manual two-sided printing from client queues. Windows' `Add-Printer` defaults to the `winprint`
+  print processor, which skipped the driver's manual-duplex handling, so "print on both sides"
+  printed one side per sheet with no flip prompt. Client queues now adopt the print processor the
+  driver installs (for example Canon's G2010 processor). Existing queues are flagged in Client and
+  can be switched in place with **Repair queue**, without re-pairing.
+
+### Added
+
+- `--diagnose` reports each queue's print processor and whether it needs repair.
+
 ## [0.1.1] - 2026-11-10
 
 ### Changed
