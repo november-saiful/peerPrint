@@ -201,6 +201,26 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                                         },
                                     );
                                 }
+                                let repairing = app.state.repairing == Some(saved.id);
+                                if repairing {
+                                    ui.spinner();
+                                } else if relay.is_some_and(|relay| relay.needs_processor_repair)
+                                    && theme::secondary_button(ui, "Repair queue").clicked()
+                                {
+                                    app.state.repairing = Some(saved.id);
+                                    let backend = app.backend.clone();
+                                    let id = saved.id;
+                                    app.spawn_action(
+                                        ui.ctx(),
+                                        ActionDone::Repaired(id, Ok(())),
+                                        async move {
+                                            backend
+                                                .repair_printer(id)
+                                                .await
+                                                .map_err(|err| format!("{err:#}"))
+                                        },
+                                    );
+                                }
                                 let testing = app.state.testing == Some(saved.id);
                                 if testing {
                                     ui.spinner();
@@ -254,6 +274,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         theme::muted(
                             ui,
                             "Queued jobs stay on this PC until peerPrint can reach the host.",
+                        );
+                    }
+                    if relay.is_some_and(|relay| relay.needs_processor_repair) {
+                        theme::muted(
+                            ui,
+                            "This queue uses the default print processor, so manual two-sided printing cannot prompt you to flip the page.",
                         );
                     }
                 });

@@ -13,7 +13,7 @@ use windows::Win32::Graphics::Printing::{
     PRINTER_STATUS_OUTPUT_BIN_FULL, PRINTER_STATUS_OUT_OF_MEMORY, PRINTER_STATUS_PAPER_JAM,
     PRINTER_STATUS_PAPER_OUT, PRINTER_STATUS_PAUSED, PRINTER_STATUS_PRINTING,
     PRINTER_STATUS_TONER_LOW, PRINTER_STATUS_USER_INTERVENTION, PRINTER_STATUS_WARMING_UP,
-    PRINTER_ACCESS_RIGHTS,
+    PRINTER_ACCESS_RIGHTS, PRINTER_READ,
 };
 
 #[derive(Clone, Debug)]
@@ -318,6 +318,65 @@ pub fn clear_bidi(printer: &str) -> Result<()> {
     unsafe {
         SetPrinterW(handle.0, 2, Some(&info as *const _ as *const u8), 0)
             .map_err(|e| anyhow::anyhow!("SetPrinterW(disable bidi): {e}"))?;
+    }
+    Ok(())
+}
+
+/// The print processor the installed v3 driver declares and Windows has registered.
+///
+/// peerPrint queues must use it: vendor processors carry behaviour that `winprint`
+/// does not reproduce, such as Canon's manual-duplex flip prompt.
+pub fn driver_print_processor(driver: &str) -> Option<String> {
+    use winreg::enums::HKEY_LOCAL_MACHINE;
+    use winreg::RegKey;
+
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let driver_key = format!(
+        r"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows x64\Drivers\Version-3\{driver}"
+    );
+    let processor: String = hklm
+        .open_subkey(driver_key)
+        .ok()?
+        .get_value("Print Processor")
+        .ok()?;
+    let processor = processor.trim().to_string();
+    if processor.is_empty() {
+        return None;
+    }
+    let registered = hklm
+        .open_subkey(r"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows x64\Print Processors")
+        .ok()?
+        .enum_keys()
+        .filter_map(Result::ok)
+        .any(|name| name.eq_ignore_ascii_case(&processor));
+    registered.then_some(processor)
+}
+
+pub fn queue_print_processor(queue: &str) -> Option<String> {
+    let handle = open_printer_with(queue, PRINTER_READ).ok()?;
+    let (info, _buffer) = read_printer_info2(&handle).ok()?;
+    let processor = pwstr_to_string(info.pPrintProcessor);
+    (!processor.is_empty()).then_some(processor)
+}
+
+pub fn queue_needs_print_processor(queue: &str, driver: &str) -> bool {
+    match (driver_print_processor(driver), queue_print_processor(queue)) {
+        (Some(expected), Some(actual)) => !actual.eq_ignore_ascii_case(&expected),
+        _ => false,
+    }
+}
+
+pub fn set_print_processor(queue: &str, processor: &str) -> Result<()> {
+    let handle = open_printer_with(queue, PRINTER_ALL_ACCESS)?;
+    let (mut info, _buffer) = read_printer_info2(&handle)?;
+    if pwstr_to_string(info.pPrintProcessor).eq_ignore_ascii_case(processor) {
+        return Ok(());
+    }
+    let mut processor_w = wide(processor);
+    info.pPrintProcessor = PWSTR(processor_w.as_mut_ptr());
+    unsafe {
+        SetPrinterW(handle.0, 2, Some(&info as *const _ as *const u8), 0)
+            .map_err(|e| anyhow::anyhow!("SetPrinterW(print processor): {e}"))?;
     }
     Ok(())
 }

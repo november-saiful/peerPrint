@@ -117,6 +117,9 @@ pub struct RelayView {
     pub listening: bool,
     pub last_error: Option<String>,
     pub last_job: Option<String>,
+    /// The driver installs a print processor that this queue is not using.
+    #[serde(default)]
+    pub needs_processor_repair: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

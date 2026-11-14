@@ -161,6 +161,12 @@ pub struct InstallResult {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RepairSpec {
+    pub queue_name: String,
+    pub driver_name: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UninstallSpec {
     pub port_name: String,
     pub queue_name: String,
@@ -169,6 +175,21 @@ pub struct UninstallSpec {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UninstallAllSpec {
     pub entries: Vec<UninstallSpec>,
+}
+
+fn validate_queue_name(queue_name: &str) -> Result<()> {
+    if queue_name.trim().is_empty() || queue_name.chars().count() > 120 {
+        bail!("invalid queue name length");
+    }
+    if queue_name
+        .chars()
+        .any(|c| c.is_control() || matches!(c, '\\' | ',' | ';' | '|'))
+        || queue_name.ends_with(' ')
+        || queue_name.ends_with('.')
+    {
+        bail!("queue name contains characters Windows rejects");
+    }
+    Ok(())
 }
 
 pub fn validate_install_spec(spec: &InstallSpec) -> Result<()> {
@@ -183,18 +204,7 @@ pub fn validate_install_spec(spec: &InstallSpec) -> Result<()> {
     if !(1024..=65530).contains(&spec.relay_port) {
         bail!("relay port out of range");
     }
-    if spec.queue_name.trim().is_empty() || spec.queue_name.chars().count() > 120 {
-        bail!("invalid queue name length");
-    }
-    if spec
-        .queue_name
-        .chars()
-        .any(|c| c.is_control() || matches!(c, '\\' | ',' | ';' | '|'))
-        || spec.queue_name.ends_with(' ')
-        || spec.queue_name.ends_with('.')
-    {
-        bail!("queue name contains characters Windows rejects");
-    }
+    validate_queue_name(&spec.queue_name)?;
     if spec.driver_name.trim().is_empty()
         || spec.driver_name.chars().count() > 128
         || spec.driver_name.chars().any(|c| c.is_control())
@@ -233,11 +243,23 @@ if (-not (Get-PrinterDriver -Name $driver -ErrorAction SilentlyContinue)) {{
   Write-Output ('DRIVER_MISSING:' + $driver)
   exit 21
 }}
-Add-Printer -Name $queue -DriverName $driver -PortName $portName -Comment 'peerPrint' -Location $location
+$procRoot = 'HKLM:\SYSTEM\CurrentControlSet\Control\Print\Environments\Windows x64\Print Processors'
+$driverKey = "HKLM:\SYSTEM\CurrentControlSet\Control\Print\Environments\Windows x64\Drivers\Version-3\$driver"
+$printProcessor = (Get-ItemProperty -Path $driverKey -Name 'Print Processor' -ErrorAction SilentlyContinue).'Print Processor'
+if ($printProcessor) {{
+  $registered = Get-ChildItem -Path $procRoot -ErrorAction SilentlyContinue | Where-Object {{ $_.PSChildName -eq $printProcessor }}
+  if (-not $registered) {{ $printProcessor = $null }}
+}}
+$params = @{{ Name = $queue; DriverName = $driver; PortName = $portName; Comment = 'peerPrint'; Location = $location; Datatype = 'RAW' }}
+if ($printProcessor) {{ $params.PrintProcessor = $printProcessor }}
+Add-Printer @params
 $installed = Get-Printer -Name $queue -ErrorAction Stop
 if ($installed.PortName -ne $portName) {{
   Write-Output ('QUEUE_PORT_MISMATCH:' + $installed.PortName)
   exit 24
+}}
+if ($printProcessor -and $installed.PrintProcessor -ne $printProcessor) {{
+  Write-Output ('QUEUE_PROCESSOR_MISMATCH:' + $installed.PrintProcessor)
 }}
 Write-Output ('QUEUE_OK:' + $queue)
 "#,
@@ -368,6 +390,10 @@ pub fn run_install_worker(path: &str) -> i32 {
         }
     };
     let text = output.combined();
+    let processor_mismatch = text
+        .lines()
+        .find_map(|line| line.strip_prefix("QUEUE_PROCESSOR_MISMATCH:"))
+        .map(|value| value.trim().to_string());
     if text.contains("DRIVER_MISSING:") {
         write_result(
             &spec_path,
@@ -428,10 +454,15 @@ pub fn run_install_worker(path: &str) -> i32 {
     }
 
     let bidi = spooler::clear_bidi(&spec.queue_name);
-    let message = match &bidi {
+    let mut message = match &bidi {
         Ok(()) => format!("Installed '{}'", spec.queue_name),
         Err(err) => format!("Installed '{}' (bidirectional flag not cleared: {err})", spec.queue_name),
     };
+    if let Some(actual) = processor_mismatch {
+        message.push_str(&format!(
+            " (Windows kept the '{actual}' print processor; two-sided printing will not prompt)"
+        ));
+    }
     write_result(
         &spec_path,
         &InstallResult {
@@ -441,6 +472,93 @@ pub fn run_install_worker(path: &str) -> i32 {
         },
     );
     0
+}
+
+pub fn run_repair_worker(path: &str) -> i32 {
+    let _ = config::ensure_dirs();
+    let spec_path = match validate_worker_path(Path::new(path), "repair-") {
+        Ok(path) => path,
+        Err(err) => {
+            eprintln!("peerPrint repair worker: {err:#}");
+            return 2;
+        }
+    };
+    let spec: RepairSpec = match config::read_json(&spec_path) {
+        Some(spec) => spec,
+        None => {
+            write_result(
+                &spec_path,
+                &InstallResult {
+                    ok: false,
+                    message: "could not read repair spec".to_string(),
+                    need_driver: false,
+                },
+            );
+            return 2;
+        }
+    };
+    if let Err(err) = validate_queue_name(&spec.queue_name).and_then(|()| {
+        if spec.driver_name.trim().is_empty()
+            || spec.driver_name.chars().count() > 128
+            || spec.driver_name.chars().any(|c| c.is_control())
+        {
+            bail!("invalid driver name");
+        }
+        Ok(())
+    }) {
+        write_result(
+            &spec_path,
+            &InstallResult {
+                ok: false,
+                message: format!("repair spec rejected: {err}"),
+                need_driver: false,
+            },
+        );
+        return 3;
+    }
+    let processor = match spooler::driver_print_processor(&spec.driver_name) {
+        Some(processor) => processor,
+        None => {
+            write_result(
+                &spec_path,
+                &InstallResult {
+                    ok: false,
+                    message: format!(
+                        "Windows has no print processor registered for driver '{}'; reinstall that driver with its own setup program",
+                        spec.driver_name
+                    ),
+                    need_driver: true,
+                },
+            );
+            return 26;
+        }
+    };
+    if let Err(err) = spooler::set_print_processor(&spec.queue_name, &processor) {
+        write_result(
+            &spec_path,
+            &InstallResult {
+                ok: false,
+                message: format!("{err:#}"),
+                need_driver: false,
+            },
+        );
+        return 27;
+    }
+    let actual = spooler::queue_print_processor(&spec.queue_name).unwrap_or_default();
+    let ok = actual.eq_ignore_ascii_case(&processor);
+    write_result(
+        &spec_path,
+        &InstallResult {
+            ok,
+            message: if ok {
+                format!("Using the '{processor}' print processor")
+            } else {
+                format!("Windows kept the '{actual}' print processor")
+            },
+            need_driver: false,
+        },
+    );
+    if ok { 0 } else { 28 }
 }
 
 pub fn run_uninstall_worker(path: &str) -> i32 {
@@ -737,6 +855,7 @@ fn run_elevated_worker(spec_path: &Path, flag: &str) -> Result<InstallResult> {
         match flag {
             "--install-client" => run_install_worker(&path) as u32,
             "--uninstall-client" => run_uninstall_worker(&path) as u32,
+            "--repair-client" => run_repair_worker(&path) as u32,
             "--uninstall-all-worker" => run_uninstall_all_worker(&path) as u32,
             _ => 2,
         }
@@ -1002,6 +1121,37 @@ pub async fn remove_printer(shared: Arc<Shared>, saved_id: Uuid) -> Result<()> {
     shared.notice(
         crate::service::NoticeLevel::Info,
         format!("Removed '{}'", saved.queue_name),
+    );
+    Ok(())
+}
+
+pub async fn repair_printer(shared: Arc<Shared>, saved_id: Uuid) -> Result<()> {
+    let saved = shared
+        .saved_printers()
+        .into_iter()
+        .find(|saved| saved.id == saved_id)
+        .context("saved printer not found")?;
+    if !queue_exists(&saved.queue_name) {
+        bail!("'{}' is not installed on this PC", saved.queue_name);
+    }
+    let spec = RepairSpec {
+        queue_name: saved.queue_name.clone(),
+        driver_name: saved.driver_name.clone(),
+    };
+    let spec_path = write_spec(&spec, "repair")?;
+    let result = tokio::task::spawn_blocking(move || run_elevated_worker(&spec_path, "--repair-client"))
+        .await
+        .context("repair task panicked")??;
+    if !result.ok {
+        bail!("{}", result.message);
+    }
+
+    if let Some(view) = shared.relay_for(saved.id) {
+        shared.set_relay(relay_view(&shared, &saved, view.listening, None));
+    }
+    shared.notice(
+        crate::service::NoticeLevel::Info,
+        format!("{}: {}", saved.queue_name, result.message),
     );
     Ok(())
 }
@@ -1620,6 +1770,10 @@ fn relay_view(shared: &Shared, saved: &SavedPrinter, listening: bool, error: Opt
         listening,
         last_error: error,
         last_job: previous.and_then(|view| view.last_job),
+        needs_processor_repair: spooler::queue_needs_print_processor(
+            &saved.queue_name,
+            &saved.driver_name,
+        ),
     }
 }
 
@@ -1629,9 +1783,12 @@ fn set_relay_job(shared: &Shared, saved: &SavedPrinter, job_ref: Uuid, state: &s
         saved_id: saved.id,
         queue_name: saved.queue_name.clone(),
         port: saved.relay_port,
-        listening: previous.map(|view| view.listening).unwrap_or(true),
+        listening: previous.as_ref().map(|view| view.listening).unwrap_or(true),
         last_error: None,
         last_job: Some(format!("{} {state}", &job_ref.simple().to_string()[..8])),
+        needs_processor_repair: previous
+            .map(|view| view.needs_processor_repair)
+            .unwrap_or(false),
     });
 }
 

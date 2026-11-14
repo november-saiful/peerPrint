@@ -4,7 +4,22 @@
 Read it fully before changing code. It records what the app is, what the user asked for, what has
 been verified, what is only probed, and the exact migration plan and commands.
 
-Last updated: 2026-11-10 (notification flyouts/center, History tab, borderless title bar, update checks).
+Last updated: 2026-11-14 (client queues adopt the driver's print processor, restoring manual duplex).
+
+> **2026-11-14 update — client queues now adopt the driver's print processor.** Manual duplex on the
+> Canon G2010 (no duplex unit; the driver exposes "Duplex Printing (Manual)") printed one side per
+> sheet from peerPrint clients because `Add-Printer` created the queue with the default `winprint`
+> processor. The host queue uses "Canon G2010 series Print Processor", which splits the job into
+> front/back passes and prompts for the flip. `client::install_script` now reads the driver's
+> `Print Processor` value from its Version-3 key, checks it is registered under `…\Print
+> Processors`, and passes `-PrintProcessor`/`-Datatype RAW` to `Add-Printer`, verifying the queue
+> adopted it. Existing queues are detected at relay start
+> (`spooler::queue_needs_print_processor` → `RelayView.needs_processor_repair`) and switched in
+> place by Client → **Repair queue**, which runs the hidden `--repair-client` elevated worker
+> (`client::run_repair_worker`) without re-pairing. New native helpers in `win\spooler.rs`:
+> `driver_print_processor`, `queue_print_processor`, `set_print_processor`. `cargo test`: 18/18.
+> Not yet verified on the client PC (IBU-WIN11): the Canon driver must be installed there with its
+> processor registered; the dialog still needs a real two-sided print to confirm.
 
 > **2026-11-09 update — UI decision reversed.** The Slint 1.18.1 migration was implemented and
 > verified, then reverted at the user's request: the Slint Royalty-free 2.0 license requires a

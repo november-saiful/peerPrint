@@ -83,6 +83,7 @@ pub enum Request {
         pin: String,
     },
     RemovePrinter { id: Uuid },
+    RepairPrinter { id: Uuid },
     TestPage { queue: String },
     Probe { addr: String },
     Firewall,
@@ -472,6 +473,16 @@ impl Backend {
         }
     }
 
+    pub async fn repair_printer(&self, id: Uuid) -> Result<()> {
+        match self {
+            Backend::Local(shared) => crate::client::repair_printer(shared.clone(), id).await,
+            Backend::Remote(_) => match send_request(&Request::RepairPrinter { id }, PAIR_TIMEOUT).await? {
+                Response::Error { message } => bail!(message),
+                _ => Ok(()),
+            },
+        }
+    }
+
     pub async fn test_page(&self, queue: String) -> Result<()> {
         match self {
             Backend::Local(_) => crate::client::test_page(queue).await,
@@ -683,6 +694,9 @@ async fn dispatch(
         },
         Request::RemovePrinter { id } => {
             crate::client::remove_printer(shared.clone(), id).await.map(|_| None)
+        }
+        Request::RepairPrinter { id } => {
+            crate::client::repair_printer(shared.clone(), id).await.map(|_| None)
         }
         Request::TestPage { queue } => crate::client::test_page(queue).await.map(|_| None),
         Request::Probe { addr } => match addr.parse::<std::net::SocketAddr>() {

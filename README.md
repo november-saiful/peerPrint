@@ -244,6 +244,9 @@ installer/         Inno Setup 6 script
 - **Client install stops at the driver step.** Install the same driver as the host, then retry.
 - **Printing stays queued.** Open peerPrint on the client and check the host is online; queued jobs
   drain automatically when it returns.
+- **Two-sided printing prints one side per sheet.** A queue created by an older peerPrint build uses
+  Windows' default `winprint` processor, which cannot run the driver's manual-duplex flip prompt.
+  Open **Client** and click **Repair queue** next to the printer; no re-pairing is needed.
 - **Everything looks wrong.** Run `peerprint.exe --diagnose` and check Settings → Diagnostics,
   including the protected-print-mode status.
 

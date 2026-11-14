@@ -44,6 +44,9 @@ struct Cli {
     /// Elevated helper: remove a client print queue from a spec file.
     #[arg(long, value_name = "SPEC", hide = true)]
     uninstall_client: Option<String>,
+    /// Elevated helper: switch a client queue to its driver's print processor.
+    #[arg(long, value_name = "SPEC", hide = true)]
+    repair_client: Option<String>,
     /// Elevated helper: remove every peerPrint queue and port.
     #[arg(long, value_name = "SPEC", hide = true)]
     uninstall_all_worker: Option<String>,
@@ -118,6 +121,9 @@ fn main() -> Result<()> {
     }
     if let Some(spec) = cli.uninstall_client.as_deref() {
         std::process::exit(client::run_uninstall_worker(spec));
+    }
+    if let Some(spec) = cli.repair_client.as_deref() {
+        std::process::exit(client::run_repair_worker(spec));
     }
     if let Some(spec) = cli.uninstall_all_worker.as_deref() {
         std::process::exit(client::run_uninstall_all_worker(spec));
@@ -409,6 +415,11 @@ fn print_diagnostics(shared: &Shared) {
                 "relay_port": printer.relay_port,
                 "installed": printer.installed,
                 "driver": printer.driver_name,
+                "print_processor": spooler::queue_print_processor(&printer.queue_name),
+                "needs_processor_repair": spooler::queue_needs_print_processor(
+                    &printer.queue_name,
+                    &printer.driver_name,
+                ),
             })
         })
         .collect();
@@ -423,6 +434,7 @@ fn print_diagnostics(shared: &Shared) {
                 "driver_env": printer.driver_env,
                 "status": printer.status_text,
                 "shareable": printer.shareable,
+                "print_processor": spooler::queue_print_processor(&printer.name),
             })
         })
         .collect();

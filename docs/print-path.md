@@ -17,6 +17,23 @@ Printing a test page through a TCP/IP queue pointing at `127.0.0.1:39160` produc
 - **Removal**: `Remove-PrinterPort` can fail with `0x80070709` even when the queue is gone. `cscript prnport.vbs -d -r <port>` (under `%WINDIR%\System32\Printing_Admin_Scripts\*\`) succeeds; the uninstaller falls back to it.
 - Bidirectional support must be cleared afterwards (`Win32_Printer.EnableBIDI = false` or `SetPrinterW` with `Attributes &= ~PRINTER_ATTRIBUTE_ENABLE_BIDI`).
 
+## Manual two-sided printing
+
+The Canon G2010 has no duplex unit, but its driver supports manual duplex: the driver's print
+processor splits a two-sided job into front and back passes and prompts when the paper has to be
+turned over. A queue created by `Add-Printer` without `-PrintProcessor` uses `winprint` instead, so
+"print on both sides" silently prints one side per sheet with no prompt.
+
+The driver declares its processor in the Version-3 driver key
+(`HKLM\SYSTEM\CurrentControlSet\Control\Print\Environments\Windows x64\Drivers\Version-3\<driver>`,
+value `Print Processor`) and registers it under `…\Print Processors`. peerPrint reads both, passes
+`-PrintProcessor` and `-Datatype RAW` when it creates the client queue, and verifies the queue
+adopted it. A queue that predates this can be switched in place from Client → **Repair queue**
+(`--repair-client`, run through the same elevated helper as install), without re-pairing.
+
+The processor runs on the client, so each pass reaches the relay as its own RAW job; the host side
+is unchanged.
+
 ## Replay and physical output
 
 - `StartDocPrinterW(datatype="RAW")` + `WritePrinter` + `EndDocPrinter` on the Canon USB queue accepted the captured stream unchanged (96,420 bytes, SHA-256 `f3988b00…0aab`) and printed the page.

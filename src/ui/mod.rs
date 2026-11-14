@@ -47,6 +47,7 @@ pub struct UiState {
     pub probe_busy: bool,
     pub pair: Option<PairingDialog>,
     pub removing: Option<Uuid>,
+    pub repairing: Option<Uuid>,
     pub testing: Option<Uuid>,
     pub pin_edit: String,
     pub firewall_busy: bool,
@@ -79,6 +80,7 @@ impl Default for UiState {
             probe_busy: false,
             pair: None,
             removing: None,
+            repairing: None,
             testing: None,
             pin_edit: String::new(),
             firewall_busy: false,
@@ -99,6 +101,7 @@ pub enum ActionDone {
     Probed(Result<(), String>),
     Installed(Uuid, Result<(), String>),
     Removed(Uuid, Result<(), String>),
+    Repaired(Uuid, Result<(), String>),
     Tested(Uuid, Result<(), String>),
     Firewall(Result<(), String>),
     UpdateChecked(Result<Option<update::Release>, String>),
@@ -151,6 +154,7 @@ impl App {
                 ActionDone::Probed(_) => ActionDone::Probed(result),
                 ActionDone::Installed(id, _) => ActionDone::Installed(id, result),
                 ActionDone::Removed(id, _) => ActionDone::Removed(id, result),
+                ActionDone::Repaired(id, _) => ActionDone::Repaired(id, result),
                 ActionDone::Tested(id, _) => ActionDone::Tested(id, result),
                 ActionDone::Firewall(_) => ActionDone::Firewall(result),
                 // Update checks deliver a release, so they spawn their own task.
@@ -186,6 +190,14 @@ impl App {
                 ActionDone::Removed(saved_id, result) => {
                     if self.state.removing == Some(saved_id) {
                         self.state.removing = None;
+                    }
+                    if let Err(message) = result {
+                        self.backend.notice(NoticeLevel::Error, message);
+                    }
+                }
+                ActionDone::Repaired(saved_id, result) => {
+                    if self.state.repairing == Some(saved_id) {
+                        self.state.repairing = None;
                     }
                     if let Err(message) = result {
                         self.backend.notice(NoticeLevel::Error, message);
